@@ -1,0 +1,42 @@
+{
+    "name": "rebase guard: require the central rebase workflow",
+    "target": "branch",
+    "enforcement": "__ENFORCEMENT__",
+    "conditions": {
+        "ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []},
+        "repository_name": {"include": ["test-*"], "exclude": []}
+    },
+    "rules": [
+        {
+            "type": "workflows",
+            "parameters": {
+                "do_not_enforce_on_create": true,
+                "workflows": [
+                    {"repository_id": __CENTRAL_REPO_ID__, "path": ".github/workflows/enforceRebase.yml", "ref": "__WORKFLOW_REF__"}
+                ]
+            }
+        },
+        {
+            "type": "required_status_checks",
+            "parameters": {
+                "strict_required_status_checks_policy": true,
+                "do_not_enforce_on_create": true,
+                "required_status_checks": [
+                    {"context": "__CHECK_CONTEXT__", "integration_id": 15368}
+                ]
+            }
+        },
+        {
+            "type": "pull_request",
+            "parameters": {
+                "required_approving_review_count": 0,
+                "dismiss_stale_reviews_on_push": false,
+                "require_code_owner_review": false,
+                "require_last_push_approval": false,
+                "required_review_thread_resolution": false,
+                "allowed_merge_methods": ["merge"]
+            }
+        }
+    ],
+    "bypass_actors": []
+}
