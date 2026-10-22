@@ -49,6 +49,11 @@ git -C "$repo" rev-parse -q --verify refs/tags/v1 > /dev/null && { failed=$((fai
 repo=$(newRepo green)
 runRelease "$repo" true v1
 expect "T-RF15-b release tags when the tests are green" 0 "created v1"
+if [ "$(git -C "$repo" cat-file -t refs/tags/v1 2> /dev/null)" = "commit" ]; then
+    passed=$((passed + 1))
+    echo "PASS T-R9-a the release tag is lightweight: a ruleset pinned to an annotated tag never runs"
+fi
+[ "$(git -C "$repo" cat-file -t refs/tags/v1 2> /dev/null)" = "commit" ] || { failed=$((failed + 1)); echo "FAIL T-R9-a the release tag is annotated"; }
 git -C "$repo" rev-parse -q --verify refs/tags/v1 > /dev/null || { failed=$((failed + 1)); echo "FAIL tag missing after green release"; }
 
 repo=$(newRepo invalid)
