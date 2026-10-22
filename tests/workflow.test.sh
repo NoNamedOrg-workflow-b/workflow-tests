@@ -88,7 +88,8 @@ check "an empty workflow commit stops the run before the checkout" guardIsVerifi
 check "the verdict step fails only when ok is false" stepHas "Fail when the branch is not rebased" "if: steps.check.outputs.ok == 'false'"
 check "the report step cannot fail the job" stepHas "Report on the pull request" "continue-on-error: true"
 check "the base branch is fetched by its full ref, so a tag cannot shadow it" grep -q 'git fetch --no-tags origin "refs/heads/$BASE"' "$workflow"
-check "the concurrency group names the workflow and falls back to the ref" grep -q 'github.workflow }}-${{ github.event.pull_request.number || github.ref }}' "$workflow"
+check "the concurrency group names the workflow and falls back to the ref" grep -q 'github.event.pull_request.number || github.ref }}' "$workflow"
+check "T-R68-a the concurrency group includes the workflow ref, so two pinned versions never cancel each other" grep -q 'github.workflow_ref }}' "$workflow"
 check "the header explains where the guarantee holds" grep -q -i 'merge ref' "$workflow"
 
 echo "workflow: $passed passed, $failed failed"

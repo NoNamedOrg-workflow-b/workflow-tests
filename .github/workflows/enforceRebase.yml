@@ -16,7 +16,8 @@ permissions:
     pull-requests: write
 
 concurrency:
-    group: enforce-rebase-${{ github.repository }}-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+    # workflow_ref names the pinned version: a canary and the active version on the same PR must not cancel each other.
+    group: enforce-rebase-${{ github.repository }}-${{ github.workflow }}-${{ github.workflow_ref }}-${{ github.event.pull_request.number || github.ref }}
     cancel-in-progress: true
 
 jobs:
