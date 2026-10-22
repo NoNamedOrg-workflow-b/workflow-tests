@@ -224,5 +224,30 @@ run "$bashBin" "$apply" "$work/env.json" "$work/odd.json" NoNamedOrg-workflow
 expect "a placeholder outside the known list aborts before any write" 2
 lacks "an unknown placeholder writes nothing" "-X P" "$calls"
 
+# The starkbank environment is the sandbox one with other names; the fake values stand in for the filled placeholders.
+echo '{"environment":"starkbank","org":"OrgExample","centralRepo":"central-workflows"}' > "$work/starkbank.json"
+echo '[[]]' > "$work/list.json"
+
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$full" OrgExample
+expect "T-RF17-a the sandbox environment with the wrong org aborts" 2
+lacks "T-RF17-a the wrong org makes no API call" "gh " "$calls"
+
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/starkbank.json" "$full" OrgExample --dry-run
+expect "T-RF17-a the starkbank environment in --dry-run succeeds" 0
+has "T-RF17-a the dry run targets the starkbank org" "would create: rebase guard: require the central rebase workflow in OrgExample" "$output"
+lacks "T-RF17-a the dry run writes nothing" "-X P" "$calls"
+
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$full" NoNamedOrg-workflow
+cp "$work/body.json" "$work/sandboxBody.json"
+run env STUB_REPO_ID=9191 CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/starkbank.json" "$full" OrgExample
+cp "$work/body.json" "$work/starkbankBody.json"
+[ "$(jq -r '.rules[]|select(.type=="workflows")|.parameters.workflows[0].repository_id' "$work/starkbankBody.json")" = "9191" ] && ok "T-RF17-a the starkbank body carries its own central repository id" || bad "T-RF17-a the starkbank repository id was not applied"
+# The central repository id is the only value that comes from the environment; everything else is the template.
+normalize='(.rules[] | select(.type == "workflows") | .parameters.workflows[0].repository_id) = 0'
+if [ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$work/starkbankBody.json")" ]; then
+    ok "T-RF17-a the starkbank body equals the sandbox body except for the environment fields"
+fi
+[ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$work/starkbankBody.json")" ] || bad "T-RF17-a the bodies differ beyond the environment fields" "$(diff <(jq -S . "$work/sandboxBody.json") <(jq -S . "$work/starkbankBody.json"))"
+
 echo "applyRuleset: $passed passed, $failed failed"
 [ "$failed" -eq 0 ]

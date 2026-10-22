@@ -21,6 +21,7 @@ bad() {
     [ -z "${2:-}" ] || echo "$2" | sed 's/^/    /'
 }
 
+# stdin is closed on every seed call: the greedy gh stub reads it and would block when the runner keeps it open.
 # The only fakes are the two external edges: the GitHub API through gh, and the network push.
 mkdir -p "$work/bin"
 realGit=$(command -v git)
@@ -47,7 +48,7 @@ runSeed() {
     local script=$1
     shift
     : > "$work/calls.log"
-    output=$(cd "$work" && env PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" ${EXTRA:-} GH_TOKEN=t "$bashBin" "$root/tools/$script" "$@" 2>&1)
+    output=$(cd "$work" && env PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" ${EXTRA:-} GH_TOKEN=t "$bashBin" "$root/tools/$script" "$@" < /dev/null 2>&1)
     status=$?
     calls=$(cat "$work/calls.log")
 }
@@ -93,7 +94,7 @@ runSeed seedRepo.sh "$work/env.json" test-x
 expect "missing arguments exit 2" 2
 has "prints the usage" "usage:" "$output"
 
-output=$(cd "$work" && env -u GH_TOKEN PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" "$bashBin" "$root/tools/seedRepo.sh" "$work/env.json" test-x public main "$work/w5" 2>&1)
+output=$(cd "$work" && env -u GH_TOKEN PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" "$bashBin" "$root/tools/seedRepo.sh" "$work/env.json" test-x public main "$work/w5" < /dev/null 2>&1)
 status=$?
 expect "a missing token exits 2" 2
 
@@ -173,7 +174,7 @@ EXTRA=""
 runSeed seedFleet.sh env.json
 expect "seedFleet without arguments exits 2" 2
 has "prints the usage" "usage:" "$output"
-output=$(cd "$work" && env -u GH_TOKEN PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" "$bashBin" "$root/tools/seedFleet.sh" env.json 3 "$work/fl" 2>&1)
+output=$(cd "$work" && env -u GH_TOKEN PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" "$bashBin" "$root/tools/seedFleet.sh" env.json 3 "$work/fl" < /dev/null 2>&1)
 status=$?
 expect "seedFleet without a token exits 2" 2
 

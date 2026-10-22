@@ -84,7 +84,7 @@ git -C "$work/origin" tag main "$feature" || { failed=$((failed + 1)); echo "FAI
 printf '#!/usr/bin/env bash\n' > "$work/guard/.github/scripts/checkRebase.sh"
 cat "$root/.github/scripts/checkRebase.sh" > "$work/guard/.github/scripts/checkRebase.sh"
 runStep "$work/guard/.github/scripts" "$feature"
-expect "a tag with the base name does not shadow the base branch" 0 "ok=false"
+expect "T-R62-a a tag with the base name does not shadow the base branch" 0 "ok=false"
 git -C "$work/origin" tag -d main > /dev/null
 
 runOther() {
