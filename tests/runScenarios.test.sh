@@ -46,7 +46,7 @@ writeResults() {
 }
 
 run() {
-    output=$("$bashBin" "$runner" "$@" 2> "$work/stderr.log" < /dev/null)
+    output=$(RUN_TESTS="$work/fakeSuite.sh" "$bashBin" "$runner" "$@" 2> "$work/stderr.log" < /dev/null)
     status=$?
     errors=$(cat "$work/stderr.log")
 }
@@ -137,7 +137,7 @@ writeCases "T-R-a RR R 7 sempre" "T-A-a RA E 4 sempre"
 writeResults "T-A-a\tPASS\tok"
 run --cases "$work/cases.tsv" --results "$work/results.tsv"
 expectLine "an R case is printed as R" "R${tab}T-R-a${tab}R${tab}"
-expectLine "an R case stays out of the totals" "summary: PASS 1, FAIL 0, N-A 0, PENDING 0, R 1, total 2"
+expectLine "an R case stays out of the totals" "summary: PASS 1, FAIL 0, N-A 0, PENDING 0, R 1, total 1"
 expectStatus "an R case does not change the exit code" 0
 
 writeCases "T-A-a RA E 4/5 sempre" "T-B-a RB E 5 sempre" "T-C-a RC E 0/7 sempre" "T-D-a RD E 45 sempre"
@@ -168,6 +168,62 @@ expectStatus "a missing results file exits 2" 2
 run --bogus
 expectStatus "an unknown option exits 2" 2
 echo "$errors" | grep -q "usage:" && ok "a usage error prints usage" || bad "no usage message" "$errors"
+
+# Only a verdict at column 0 counts: indented lines are the output of a command inside a failing test.
+writeCases "T-C-a RC L 1 sempre"
+printf 'FAIL other\n    PASS T-C-a\n' > "$work/suite.out"
+runSuite --cases "$work/cases.tsv"
+expectLine "an indented PASS line is not a verdict" "PENDING${tab}T-C-a${tab}L${tab}no PASS line"
+printf 'PASS T-C-a ok\n    FAIL T-C-a inner\n' > "$work/suite.out"
+runSuite --cases "$work/cases.tsv"
+expectLine "an indented FAIL line does not fail a passed case" "PASS${tab}T-C-a${tab}L${tab}"
+
+esc=$(printf '\033')
+printf '%s[32mPASS%s[0m T-C-a ok\n' "$esc" "$esc" > "$work/suite.out"
+runSuite --cases "$work/cases.tsv"
+expectLine "a coloured PASS line counts" "PASS${tab}T-C-a${tab}L${tab}"
+printf 'PASS T-C-a ok\n%s[1;31mFAIL%s[0m T-C-a broke\n' "$esc" "$esc" > "$work/suite.out"
+runSuite --cases "$work/cases.tsv"
+expectLine "a coloured FAIL line counts" "FAIL${tab}T-C-a${tab}L${tab}"
+
+writeCases "T-R-a RR R 7 sempre"
+run --cases "$work/cases.tsv"
+expectLine "a selection of only R cases reports them apart" "summary: PASS 0, FAIL 0, N-A 0, PENDING 0, R 1, total 0"
+expectStatus "a selection of only R cases exits 0" 0
+
+# Registry and results files are validated before anything runs.
+badRegistry() {
+    local name=$1 content=$2
+    printf '%b' "$content" > "$work/bad.tsv"
+    run --cases "$work/bad.tsv"
+    expectStatus "$name" 2
+}
+badRegistry "a registry with another header exits 2" 'id\trisco\ttipo\tme\tgatilho\nA\tR\tL\t1\tsempre\n'
+badRegistry "a registry row with 4 fields exits 2" 'caso\trisco\ttipo\tme\tgatilho\nA\tR\tL\t1\n'
+badRegistry "a registry row with 6 fields exits 2" 'caso\trisco\ttipo\tme\tgatilho\nA\tR\tL\t1\tsempre\textra\n'
+badRegistry "a registry row with an unknown tipo exits 2" 'caso\trisco\ttipo\tme\tgatilho\nA\tR\tX\t1\tsempre\n'
+badRegistry "a registry row with a malformed me exits 2" 'caso\trisco\ttipo\tme\tgatilho\nA\tR\tL\t1//2\tsempre\n'
+badRegistry "a registry with a duplicate id exits 2" 'caso\trisco\ttipo\tme\tgatilho\nA\tR\tL\t1\tsempre\nA\tR\tL\t1\tsempre\n'
+echo "$errors" | grep -q "duplicate" && ok "the duplicate id is named on stderr" || bad "no message for the duplicate id" "$errors"
+
+writeCases "T-E-a RE E 4 sempre"
+printf 'caso\tfoo\tevidencia\nT-E-a\tPASS\tok\n' > "$work/results.tsv"
+run --cases "$work/cases.tsv" --results "$work/results.tsv"
+expectStatus "a results file with another header exits 2" 2
+
+printf 'caso\trisco\ttipo\tme\tgatilho\r\nT-E-a\tRE\tE\t4\tsempre\r\n' > "$work/crlf.tsv"
+printf 'caso\tresultado\tevidencia\r\nT-E-a\tPASS\tok\r\n' > "$work/crlfResults.tsv"
+run --cases "$work/crlf.tsv" --results "$work/crlfResults.tsv"
+expectLine "CRLF files are read as LF files" "PASS${tab}T-E-a${tab}E${tab}ok"
+
+# A backslash in a path must reach awk untouched.
+mkdir -p "$work/back\\slash"
+writeCases "T-E-a RE E 4 sempre"
+writeResults "T-E-a\tPASS\tok"
+cp "$work/cases.tsv" "$work/back\\slash/cases.tsv"
+cp "$work/results.tsv" "$work/back\\slash/results.tsv"
+run --cases "$work/back\\slash/cases.tsv" --results "$work/back\\slash/results.tsv"
+expectLine "paths with a backslash are read" "PASS${tab}T-E-a${tab}E${tab}ok"
 
 # The default registry must be found from any directory.
 printf 'PASS T-R35-a x\n' > "$work/suite.out"

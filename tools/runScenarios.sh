@@ -40,6 +40,38 @@ if [ -n "$resultsFile" ] && ! [ -f "$resultsFile" ]; then
     exit 2
 fi
 
+# A registry or results file that is not what the gate expects must stop it before anything runs: a silently
+# skipped row would read as a case that passed.
+checked=$(CASES_FILE="$casesFile" RESULTS_FILE="$resultsFile" awk '
+function fail(message) {
+    print message > "/dev/stderr"
+    exit 2
+}
+
+BEGIN {
+    FS = "\t"
+    casesFile = ENVIRON["CASES_FILE"]
+    resultsFile = ENVIRON["RESULTS_FILE"]
+    first = 1
+    while ((getline line < casesFile) > 0) {
+        sub(/\r$/, "", line)
+        if (first && line != "caso\trisco\ttipo\tme\tgatilho") fail("invalid cases file: bad header in " casesFile)
+        if (first) { first = 0; continue }
+        if (line == "") continue
+        if (split(line, fields, "\t") != 5) fail("invalid cases file: a row without exactly 5 fields: " line)
+        if (fields[3] !~ /^[LEMDR]$/) fail("invalid cases file: tipo must be L, E, M, D or R: " fields[1])
+        if (fields[4] !~ /^[0-9]+(\/[0-9]+)*$/) fail("invalid cases file: bad me field: " fields[1])
+        if (fields[1] in seen) fail("invalid cases file: duplicate id: " fields[1])
+        seen[fields[1]] = 1
+    }
+    if (first) fail("invalid cases file: empty " casesFile)
+    if (resultsFile == "") exit 0
+    getline line < resultsFile
+    sub(/\r$/, "", line)
+    if (line != "caso\tresultado\tevidencia") fail("invalid results file: bad header in " resultsFile)
+}' < /dev/null && echo checked) || exit 2
+[ "$checked" = "checked" ] || exit 2
+
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 suiteOutput="$work/suite.out"
@@ -57,10 +89,16 @@ runSuites() {
     sh -c "$RUN_TESTS" < /dev/null 2>&1
 }
 
-# The suite exit code is not the verdict: each case is judged by its own line.
-[ -z "$needsSuites" ] || runSuites | tr -d '\033' > "$suiteOutput"
+# BSD and GNU sed both take the literal ESC; the C locale keeps non-UTF-8 bytes from aborting sed. Leftover ESC
+# bytes are dropped so a verdict can never hide behind a control sequence.
+stripColours() {
+    LC_ALL=C sed $'s/\033\\[[0-9;]*m//g' | tr -d '\033'
+}
 
-awk -v casesFile="$casesFile" -v resultsFile="$resultsFile" -v suiteOutput="$suiteOutput" -v me="$me" '
+# The suite exit code is not the verdict: each case is judged by its own line.
+[ -z "$needsSuites" ] || runSuites | stripColours > "$suiteOutput"
+
+CASES_FILE="$casesFile" RESULTS_FILE="$resultsFile" SUITE_OUTPUT="$suiteOutput" awk -v me="$me" '
 function selected(meField,    n, parts, i) {
     if (me == "") return 1
     n = split(meField, parts, "/")
@@ -94,24 +132,30 @@ function judgeRecorded(id, type,    result) {
 
 BEGIN {
     FS = "\t"
-    total = 0
+    casesFile = ENVIRON["CASES_FILE"]
+    resultsFile = ENVIRON["RESULTS_FILE"]
+    suiteOutput = ENVIRON["SUITE_OUTPUT"]
+    selectedCount = 0
     first = 1
     while ((getline line < casesFile) > 0) {
+        sub(/\r$/, "", line)
         if (first) { first = 0; continue }
         if (blank(line)) continue
         split(line, fields, "\t")
         known[fields[1]] = 1
         if (!selected(fields[4])) continue
-        total++
-        ids[total] = fields[1]
-        types[total] = fields[3]
+        selectedCount++
+        ids[selectedCount] = fields[1]
+        types[selectedCount] = fields[3]
     }
 
     first = 1
     while (resultsFile != "" && (getline line < resultsFile) > 0) {
+        sub(/\r$/, "", line)
         if (first) { first = 0; continue }
         if (blank(line)) continue
         split(line, fields, "\t")
+        # The last row wins even when it is empty or invalid: a later row that retracts a PASS must hold the gate.
         resultOf[fields[1]] = fields[2]
         evidenceOf[fields[1]] = fields[3]
         if (fields[1] in known || fields[1] in warned) continue
@@ -121,21 +165,21 @@ BEGIN {
 
     while ((getline line < suiteOutput) > 0) {
         split(line, words, " ")
-        if (words[1] == "PASS") passedLines[words[2]] = 1
-        if (words[1] == "FAIL") failedLines[words[2]] = 1
+        if (substr(line, 1, 5) == "PASS ") passedLines[words[2]] = 1
+        if (substr(line, 1, 5) == "FAIL ") failedLines[words[2]] = 1
     }
 
-    if (total == 0) {
+    if (selectedCount == 0) {
         print "no case selected" > "/dev/stderr"
         exit 2
     }
 
-    for (i = 1; i <= total; i++) {
+    for (i = 1; i <= selectedCount; i++) {
         if (types[i] == "R") { printf "R\t%s\tR\t\n", ids[i]; rCount++; continue }
         if (types[i] == "L") { judgeLocal(ids[i]); continue }
         judgeRecorded(ids[i], types[i])
     }
 
-    printf "summary: PASS %d, FAIL %d, N-A %d, PENDING %d, R %d, total %d\n", count["PASS"], count["FAIL"], count["N-A"], count["PENDING"], rCount, total
+    printf "summary: PASS %d, FAIL %d, N-A %d, PENDING %d, R %d, total %d\n", count["PASS"], count["FAIL"], count["N-A"], count["PENDING"], rCount, selectedCount - rCount
     exit (count["FAIL"] + count["PENDING"] > 0) ? 1 : 0
 }'

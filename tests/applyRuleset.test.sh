@@ -241,7 +241,7 @@ run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$full"
 cp "$work/body.json" "$work/sandboxBody.json"
 run env STUB_REPO_ID=9191 CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/starkbank.json" "$full" OrgExample
 cp "$work/body.json" "$work/starkbankBody.json"
-[ "$(jq -r '.rules[]|select(.type=="workflows")|.parameters.workflows[0].repository_id' "$work/starkbankBody.json")" = "9191" ] && ok "T-RF17-a the starkbank body carries its own central repository id" || bad "the starkbank repository id was not applied"
+[ "$(jq -r '.rules[]|select(.type=="workflows")|.parameters.workflows[0].repository_id' "$work/starkbankBody.json")" = "9191" ] && ok "T-RF17-a the starkbank body carries its own central repository id" || bad "T-RF17-a the starkbank repository id was not applied"
 # The central repository id is the only value that comes from the environment; everything else is the template.
 normalize='(.rules[] | select(.type == "workflows") | .parameters.workflows[0].repository_id) = 0'
 if [ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$work/starkbankBody.json")" ]; then
