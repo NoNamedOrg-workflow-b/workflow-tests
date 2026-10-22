@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Tags only when the local tests pass on the exact committed tree, so a broken central workflow never gets a
-# version the ruleset can pin.
+# version the ruleset can pin. The tag is lightweight on purpose: a ruleset that requires the workflow at an annotated
+# tag is accepted by the API and then never runs, so the pull requests would get no check at all.
 set -euo pipefail
 
 tag=${1:-}
@@ -35,5 +36,5 @@ if ! runTests > /dev/null; then
     exit 1
 fi
 
-git tag -a "$tag" -m "$tag" "$tested"
+git tag "$tag" "$tested"
 echo "created $tag (not pushed)"
