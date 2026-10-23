@@ -64,7 +64,7 @@ git rebase $quotedBase
 git push --force-with-lease
 ${fence}
 
-Do not use the **Update branch** button: it merges the base branch into yours, which this check rejects."
+If you use the **Update branch** button, choose **Update with rebase**: the merge commit option adds a merge commit, which this check rejects."
 
 gh api -X POST "repos/$REPO/issues/$NUMBER/labels" -f "labels[]=$label" --silent \
     || warn "could not apply the $label label on #$NUMBER"
