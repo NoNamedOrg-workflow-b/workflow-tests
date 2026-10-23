@@ -249,5 +249,35 @@ if [ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$
 fi
 [ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$work/starkbankBody.json")" ] || bad "T-RF17-a the bodies differ beyond the environment fields" "$(diff <(jq -S . "$work/sandboxBody.json") <(jq -S . "$work/starkbankBody.json"))"
 
+# RF14: a repository joins or leaves a wave by its custom property, so the template must not name repositories.
+byProperty="$root/rulesets/rebaseRulesetByProperty.json"
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$byProperty" NoNamedOrg-workflow
+expect "T-RF14-a the by-property template is applied without placeholders left" 0
+propertyConditions=$(jq -c '.conditions | keys' "$work/body.json" 2> /dev/null)
+[ "$propertyConditions" = '["ref_name","repository_property"]' ] && ok "T-RF14-a the template selects repositories by custom property and not by name" || bad "T-RF14-a unexpected conditions: $propertyConditions"
+wantedProperty='{"exclude":[{"name":"rebaseExempt","property_values":["true"],"source":"custom"}],"include":[{"name":"rebaseWave","property_values":["on"],"source":"custom"}]}'
+[ "$(jq -cS '.conditions.repository_property' "$work/body.json")" = "$wantedProperty" ] && ok "T-RF14-a the wave property turns the rule on and T-RF14-b the exemption is excluded, nothing else" || bad "T-RF14-a the property condition is not exactly the wave and exemption pair" "$(jq -cS '.conditions.repository_property' "$work/body.json")"
+cp "$work/body.json" "$work/created-property.json"
+# The templates are not valid JSON until their placeholders are filled in.
+render() {
+    sed -e 's/__ENFORCEMENT__/evaluate/' -e 's#__WORKFLOW_REF__#refs/tags/v0#' -e 's#__CHECK_CONTEXT__#ctx#' -e 's/__CENTRAL_REPO_ID__/1/' "$1"
+}
+byPropertyName=$(render "$byProperty" | jq -r .name)
+rulesName=$(render "$full" | jq -r .name)
+[ -n "$byPropertyName" ] && [ -n "$rulesName" ] && [ "$byPropertyName" != "$rulesName" ] && ok "T-RF14-a the by-property ruleset has its own name, so it never overwrites the by-name one" || bad "T-RF14-a the names are empty or equal: '$byPropertyName' '$rulesName'"
+propertyRules=$(render "$byProperty" | jq -cS '.rules')
+nameRules=$(render "$full" | jq -cS '.rules')
+[ -n "$propertyRules" ] && [ "$propertyRules" != "null" ] && [ "$propertyRules" = "$nameRules" ] && ok "T-RF14-a the rules are the same as the by-name template, only the targeting differs" || bad "T-RF14-a the rules differ from the by-name template or are empty"
+
+# The stored ruleset must align with the template, or every run would report an update and idempotency would be lost.
+jq "$withDefaults" "$work/created-property.json" > "$work/stored.json"
+jq '[[{id: 9, name: .name}]]' "$work/stored.json" > "$work/list.json"
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$byProperty" NoNamedOrg-workflow
+has "T-RF14-a applying the by-property template again says unchanged" "unchanged" "$output"
+jq "$withDefaults | .conditions.repository_property.include[0].property_values = [\"off\"]" "$work/created-property.json" > "$work/stored.json"
+jq '[[{id: 9, name: .name}]]' "$work/stored.json" > "$work/list.json"
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$byProperty" NoNamedOrg-workflow
+has "T-RF14-a a wave value changed by somebody is a difference and gets updated" "-X PUT orgs/NoNamedOrg-workflow/rulesets/9" "$calls"
+
 echo "applyRuleset: $passed passed, $failed failed"
 [ "$failed" -eq 0 ]
