@@ -68,7 +68,7 @@ fi
 
 # Marks :1..:count are the default branch commits; the case branches fork from the tip and from the commit before it.
 buildStream() {
-    awk -v count="$count" -v default="$default" '
+    awk -v count="$count" -v defaultBranch="$default" '
         function commit(ref, mark, parent, file, body,    message, who) {
             message = "commit " mark
             who = "scenario-builder <scenario-builder@example.com> " (1700000000 + mark * 60) " +0000"
@@ -84,7 +84,7 @@ buildStream() {
             print body
         }
         BEGIN {
-            for (n = 1; n <= count; n++) commit(default, n, "", "data/" (n % 100) ".txt", "content " n)
+            for (n = 1; n <= count; n++) commit(defaultBranch, n, "", "data/" (n % 100) ".txt", "content " n)
             commit("case/rebased", count + 1, count, "case/rebased.txt", "rebased")
             commit("case/behind", count + 2, count - 1, "case/behind.txt", "behind")
         }'
