@@ -249,5 +249,24 @@ if [ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$
 fi
 [ "$(jq -S "$normalize" "$work/sandboxBody.json")" = "$(jq -S "$normalize" "$work/starkbankBody.json")" ] || bad "T-RF17-a the bodies differ beyond the environment fields" "$(diff <(jq -S . "$work/sandboxBody.json") <(jq -S . "$work/starkbankBody.json"))"
 
+# RF14: a repository joins or leaves a wave by its custom property, so the template must not name repositories.
+byProperty="$root/rulesets/rebaseRulesetByProperty.json"
+run env CHECK_CONTEXT=rebase-status "$bashBin" "$apply" "$work/env.json" "$byProperty" NoNamedOrg-workflow
+expect "T-RF14-a the by-property template is applied without placeholders left" 0
+propertyConditions=$(jq -c '.conditions | keys' "$work/body.json" 2> /dev/null)
+[ "$propertyConditions" = '["ref_name","repository_property"]' ] && ok "T-RF14-a the template selects repositories by custom property and not by name" || bad "T-RF14-a unexpected conditions: $propertyConditions"
+[ "$(jq -r '.conditions.repository_property.include[0] | "\(.name)=\(.property_values[0])"' "$work/body.json")" = "rebaseWave=on" ] && ok "T-RF14-a the wave property turns the rule on" || bad "T-RF14-a the include list is not rebaseWave=on"
+[ "$(jq -r '.conditions.repository_property.exclude[0] | "\(.name)=\(.property_values[0])"' "$work/body.json")" = "rebaseExempt=true" ] && ok "T-RF14-b the exemption property is excluded" || bad "T-RF14-b the exclude list is not rebaseExempt=true"
+# The templates are not valid JSON until their placeholders are filled in.
+render() {
+    sed 's/__[A-Z_]*__/1/g' "$1"
+}
+byPropertyName=$(render "$byProperty" | jq -r .name)
+rulesName=$(render "$full" | jq -r .name)
+[ -n "$byPropertyName" ] && [ -n "$rulesName" ] && [ "$byPropertyName" != "$rulesName" ] && ok "T-RF14-a the by-property ruleset has its own name, so it never overwrites the by-name one" || bad "T-RF14-a the names are empty or equal: '$byPropertyName' '$rulesName'"
+propertyRules=$(render "$byProperty" | jq -cS '.rules')
+nameRules=$(render "$full" | jq -cS '.rules')
+[ -n "$propertyRules" ] && [ "$propertyRules" != "null" ] && [ "$propertyRules" = "$nameRules" ] && ok "T-RF14-a the rules are the same as the by-name template, only the targeting differs" || bad "T-RF14-a the rules differ from the by-name template or are empty"
+
 echo "applyRuleset: $passed passed, $failed failed"
 [ "$failed" -eq 0 ]
