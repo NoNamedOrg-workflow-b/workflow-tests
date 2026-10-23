@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Creates one synthetic repository in the sandbox org with a large linear history, to measure what fetch-depth: 0
 # costs. An existing repository is never touched, and it is created only after the whole local history exists, so a
-# failure leaves nothing empty on GitHub. The history is one git fast-import stream: a commit per git commit would
-# take minutes at tens of thousands of commits.
+# build failure leaves nothing on GitHub. A push failure after the creation leaves an empty repository that must be
+# deleted by hand. The history is one git fast-import stream: a commit per git commit would take minutes at tens of
+# thousands of commits.
 set -euo pipefail
 
 if [ "$#" -ne 6 ]; then
@@ -11,7 +12,11 @@ if [ "$#" -ne 6 ]; then
 fi
 
 # The tools below change directory, so a relative path would stop resolving.
-envFile=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
+envDir=$(cd "$(dirname "$1")" 2> /dev/null && pwd) || {
+    echo "environment directory not found: $(dirname "$1")" >&2
+    exit 2
+}
+envFile=$envDir/$(basename "$1")
 repo=$2
 visibility=$3
 default=$4
@@ -47,8 +52,9 @@ if ! git check-ref-format --branch "$default" > /dev/null 2>&1; then
 fi
 
 # These names are used by the case branches or mean something else to git (@ is HEAD).
-case "$default" in
-    @ | HEAD | case | case/*)
+lowerDefault=$(echo "$default" | tr '[:upper:]' '[:lower:]')
+case "$lowerDefault" in
+    @ | head | case | case/*)
         echo "reserved branch name: $default" >&2
         exit 2
         ;;
@@ -99,8 +105,12 @@ git remote add origin "https://github.com/$org/$repo.git"
 
 gh repo create "$org/$repo" "--$visibility" --description "Synthetic large-history repository for the rebase check"
 export ENV_FILE=$envFile
-"$tools/gitOrg.sh" push origin "$default"
-"$tools/gitOrg.sh" push origin case/rebased case/behind
+pushBranches() {
+    "$tools/gitOrg.sh" push origin "$default" && "$tools/gitOrg.sh" push origin case/rebased case/behind && return 0
+    echo "created $org/$repo but a push failed: delete it before retrying" >&2
+    return 1
+}
+pushBranches
 
 # The first pushed branch becomes the default of an empty repository, but a repository setting could say otherwise.
 current=$(gh api "repos/$org/$repo" --jq .default_branch 2> /dev/null || true)

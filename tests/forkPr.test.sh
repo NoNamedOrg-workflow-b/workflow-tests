@@ -9,6 +9,7 @@ passed=0
 failed=0
 org=NoNamedOrg-workflow
 login=me-personal
+repo=test-development
 
 echo "{\"environment\":\"sandbox\",\"org\":\"$org\"}" > "$work/env.json"
 
@@ -46,11 +47,21 @@ mkdir -p "$work/bin"
 realGit=$(command -v git)
 cat > "$work/bin/gh" <<'STUB'
 #!/usr/bin/env bash
-echo "gh $* [GH_TOKEN=${GH_TOKEN-absent} GITHUB_TOKEN=${GITHUB_TOKEN-absent}]" >> "$STUB_LOG"
+echo "gh $* [GH_TOKEN=${GH_TOKEN-absent} GITHUB_TOKEN=${GITHUB_TOKEN-absent} GH_HOST=${GH_HOST-absent} GH_CONFIG_DIR=${GH_CONFIG_DIR-absent} GH_ENTERPRISE_TOKEN=${GH_ENTERPRISE_TOKEN-absent}]" >> "$STUB_LOG"
+failFirst() {
+    local name=$1 limit=$2 seen
+    seen=$(cat "$STUB_STATE/$name" 2> /dev/null || echo 0)
+    echo $((seen + 1)) > "$STUB_STATE/$name"
+    [ "$seen" -lt "$limit" ]
+}
+case "$*" in
+    "repo fork"*) [ "${STUB_FORK_FAIL:-}" = "yes" ] && exit 1 ;;
+    "api repos/me-personal/"*) failFirst parent "${STUB_PARENT_FAILS:-0}" && exit 1 ;;
+esac
 case "$*" in
     "api repos/NoNamedOrg-workflow/"*) printf '%s\n%s\n%s\n' "${STUB_PRIVATE:-false}" "${STUB_FORK:-false}" development ;;
     "api repos/me-personal/"*) echo "${STUB_PARENT-NoNamedOrg-workflow/test-development}" ;;
-    "api user"*) echo "${STUB_LOGIN-me-personal}" ;;
+    "api user"*) login=${STUB_LOGIN-me-personal}; echo "${login//_/ }" ;;
     "pr create"*) echo "https://github.com/NoNamedOrg-workflow/test-development/pull/7" ;;
 esac
 exit 0
@@ -62,11 +73,18 @@ case " \$* " in
     *) exec "$realGit" "\$@" ;;
 esac
 echo "git \$*" >> "\$STUB_LOG"
+case " \$* " in
+    *" clone "*) failFirst() { local seen; seen=\$(cat "\$STUB_STATE/clone" 2> /dev/null || echo 0); echo \$((seen + 1)) > "\$STUB_STATE/clone"; [ "\$seen" -lt "\${STUB_CLONE_FAILS:-0}" ]; }; failFirst && exit 128 ;;
+    *" push "*) [ "\${STUB_PUSH_FAIL:-}" = "yes" ] && exit 1 ;;
+esac
 "$realGit" \\
     -c "url.$work/fork.git.insteadOf=git@github.com:me-personal/test-development.git" \\
     -c "url.$work/upstream.git.insteadOf=https://github.com/NoNamedOrg-workflow/test-development.git" "\$@" || exit \$?
 case " \$* " in
     *" clone "*) [ "\${STUB_BAD_ORIGIN:-}" = "yes" ] && "$realGit" -C "\${!#}" remote set-url origin https://github.com/NoNamedOrg-workflow/test-development.git ;;
+esac
+case " \$* " in
+    *" clone "*) [ "\${STUB_BAD_PUSHURL:-}" = "yes" ] && "$realGit" -C "\${!#}" config remote.origin.pushurl https://github.com/NoNamedOrg-workflow/test-development.git ;;
 esac
 exit 0
 STUB
@@ -85,10 +103,23 @@ runFork() {
     git clone -q --bare "$work/seed" "$work/upstream.git"
     git clone -q --bare "$work/seed" "$work/fork.git"
     : > "$work/calls.log"
-    output=$(cd "$work" && env PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" GITHUB_TOKEN=leak ${EXTRA:-} "$bashBin" "$root/tools/forkPr.sh" "$@" < /dev/null 2>&1)
+    rm -rf "$work/state"
+    mkdir -p "$work/state"
+    output=$(cd "$work" && env PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" STUB_STATE="$work/state" FORK_WAIT_SECONDS=0 GITHUB_TOKEN=leak GH_HOST=evil.example GH_CONFIG_DIR=evilconfig GH_ENTERPRISE_TOKEN=leak ${EXTRA:-} "$bashBin" "$root/tools/forkPr.sh" "$@" < /dev/null 2>&1)
     status=$?
     calls=$(cat "$work/calls.log")
 }
+
+# Compares the extracted owner/repo arguments exactly, so a look-alike such as test-development-evil is caught.
+unexpectedRepos() {
+    sed -e 's#repos/##g' -e 's#fork/[a-z]*-[0-9]*##g' "$1" \
+        | grep -o -E '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' \
+        | sort -u \
+        | grep -v -x -F -e "$org/test-development" -e "$login/test-development" || true
+}
+
+printf '%s\n' "gh repo fork $org/test-development-evil --clone=false" "gh api repos/$org/test-development --jq x" > "$work/evil.log"
+[ "$(unexpectedRepos "$work/evil.log")" = "$org/test-development-evil" ] && ok "the repository check catches a look-alike repository" || bad "the repository check missed a look-alike"
 
 EXTRA=""
 runFork "$work/env.json" rebased
@@ -164,9 +195,10 @@ has "the base is the default branch" "--base development" "$calls"
 [ "$(git -C "$dir" remote get-url origin)" = "git@github.com:$login/test-development.git" ] && ok "origin is the personal fork" || bad "wrong origin"
 
 echo "$calls" | grep '^gh ' > "$work/gh.log"
-[ -s "$work/gh.log" ] && ! grep -v -F -e 'GH_TOKEN=absent GITHUB_TOKEN=absent]' "$work/gh.log" > /dev/null && ok "every gh call ran without the org token" || bad "a gh call saw a token" "$(cat "$work/gh.log")"
+[ -s "$work/gh.log" ] && ! grep -v -F -e 'GH_TOKEN=absent GITHUB_TOKEN=absent ' "$work/gh.log" > /dev/null && ok "every gh call ran without the org token" || bad "a gh call saw a token" "$(cat "$work/gh.log")"
+! grep -v -F -e 'GH_HOST=absent GH_CONFIG_DIR=absent GH_ENTERPRISE_TOKEN=absent]' "$work/gh.log" > /dev/null && ok "gh host and config variables are scrubbed" || bad "a gh call saw a host or config variable"
 has "the fork is requested without cloning" "repo fork $org/test-development --clone=false" "$calls"
-stray=$(sed -e "s#$org/test-development##g" -e "s#$login/test-development##g" -e 's#fork/[a-z]*-[0-9]*##g' "$work/gh.log" | grep -E '[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+' || true)
+stray=$(unexpectedRepos "$work/gh.log")
 [ -z "$stray" ] && ok "gh only names the two allowed repositories" || bad "gh named another repository" "$stray"
 strayGit=$(echo "$calls" | grep '^git ' | sed -e "s#git@github.com:$login/test-development.git##g" -e "s#https://github.com/$org/test-development.git##g" | grep -E 'github\.com' || true)
 [ -z "$strayGit" ] && ok "git only names the two allowed remotes" || bad "git named another remote" "$strayGit"
@@ -183,6 +215,67 @@ runFork "$work/env.json" rebased "$work/w12"
 expect "an origin that is not the personal fork aborts" 2
 lacks "nothing is pushed" " push " "$calls"
 lacks "no pull request is opened" "pr create" "$calls"
+
+EXTRA="STUB_BAD_PUSHURL=yes"
+runFork "$work/env.json" rebased "$work/w13"
+expect "a push URL that points at the org repository aborts" 2
+lacks "nothing is pushed to the org repository" " push " "$calls"
+[ ! -d "$work/w13/$login-$repo" ] && ok "the clone of an aborted run is removed" || bad "the clone was left behind"
+
+output=$(cd "$work" && env GH_TOKEN= PATH="$work/bin:$PATH" STUB_LOG="$work/calls.log" "$bashBin" "$root/tools/forkPr.sh" "$work/env.json" rebased "$work/w14" < /dev/null 2>&1)
+status=$?
+expect "an empty GH_TOKEN is refused too" 2
+
+for badLogin in a_b x/../y; do
+    EXTRA="STUB_LOGIN=$badLogin"
+    runFork "$work/env.json" rebased "$work/w15"
+    expect "an invalid login '$badLogin' exits 2" 2
+    lacks "no fork for the login '$badLogin'" "repo fork" "$calls"
+done
+
+EXTRA="STUB_FORK_FAIL=yes"
+runFork "$work/env.json" rebased "$work/w16"
+expect "a failing gh repo fork exits 2" 2
+lacks "nothing is cloned after a failed fork" "git clone" "$calls"
+
+EXTRA="STUB_PARENT_FAILS=2"
+runFork "$work/env.json" rebased "$work/w17"
+expect "a fork that appears after two 404 answers is waited for" 0
+[ "$(echo "$calls" | grep -c 'api repos/me-personal/')" -eq 3 ] && ok "the parent lookup is retried until it answers" || bad "wrong number of parent lookups" "$calls"
+
+EXTRA="STUB_PARENT_FAILS=99"
+runFork "$work/env.json" rebased "$work/w18"
+expect "a fork that never appears exits 2" 2
+has "says the fork did not appear" "did not appear" "$output"
+[ "$(echo "$calls" | grep -c 'api repos/me-personal/')" -eq 10 ] && ok "the parent lookup is bounded at 10 tries" || bad "unbounded parent lookups" "$calls"
+lacks "nothing is cloned" "git clone" "$calls"
+
+EXTRA="STUB_CLONE_FAILS=2"
+runFork "$work/env.json" rebased "$work/w19"
+expect "a clone that fails twice is retried" 0
+[ "$(echo "$calls" | grep -c 'git clone')" -eq 3 ] && ok "the clone is retried until it works" || bad "wrong number of clones" "$calls"
+
+EXTRA="STUB_CLONE_FAILS=99"
+runFork "$work/env.json" rebased "$work/w20"
+expect "a clone that never works exits 2" 2
+[ "$(echo "$calls" | grep -c 'git clone')" -eq 10 ] && ok "the clone is bounded at 10 tries" || bad "unbounded clones" "$calls"
+lacks "no pull request is opened" "pr create" "$calls"
+
+EXTRA="STUB_PUSH_FAIL=yes"
+runFork "$work/env.json" rebased "$work/w21"
+expect "a failed push exits 2" 2
+lacks "no pull request is opened after a failed push" "pr create" "$calls"
+[ ! -d "$work/w21/$login-$repo" ] && ok "the clone is removed after a failed push so a rerun works" || bad "the clone was left behind"
+
+EXTRA=""
+mkdir -p "$work/w22/$login-$repo"
+runFork "$work/env.json" rebased "$work/w22"
+expect "an occupied directory is refused again" 2
+[ -d "$work/w22/$login-$repo" ] && ok "a directory this run did not create is never removed" || bad "a foreign directory was removed"
+
+runFork "$work/missing/env.json" rebased "$work/w23"
+expect "an environment file in a missing directory exits 2" 2
+lacks "no gh call without an environment" "gh " "$calls"
 
 echo "forkPr: $passed passed, $failed failed"
 [ "$failed" -eq 0 ]

@@ -38,7 +38,7 @@ STUB
 cat > "$work/bin/git" <<STUB
 #!/usr/bin/env bash
 case "\$*" in
-    *" push "*) echo "git \$*" >> "\$STUB_LOG"; exit 0 ;;
+    *" push "*) echo "git \$*" >> "\$STUB_LOG"; [ "\${STUB_PUSH_FAIL:-}" = "yes" ] && exit 1; exit 0 ;;
 esac
 exec "$realGit" "\$@"
 STUB
@@ -100,6 +100,35 @@ done
 runSeed "$work/env.json" h-count private case/x "$work/wc" 5
 expect "a reserved default branch exits 2" 2
 lacks "nothing is created for a reserved branch" "gh repo create" "$calls"
+
+for badBranch in @ HEAD -x "a b" Case CASE/x; do
+    runSeed "$work/env.json" h-branch private "$badBranch" "$work/wb" 5
+    expect "an invalid default branch '$badBranch' exits 2" 2
+    lacks "nothing is created for the branch '$badBranch'" "gh repo create" "$calls"
+done
+
+# 100000 commits would take too long to build here, so the boundary is proven by reaching the existence check,
+# which runs right after validation.
+EXTRA="STUB_EXISTS=yes"
+for boundary in 2 100000; do
+    runSeed "$work/env.json" h-bound private main "$work/wbound" "$boundary"
+    has "the count $boundary passes validation" "already exists" "$output"
+done
+EXTRA=""
+runSeed "$work/env.json" h-two private main "$work/wtwo" 2
+expect "the minimum of 2 commits is seeded" 0
+repoDir="$work/wtwo/h-two"
+countIs "the minimum history has 2 commits" 2 main
+
+runSeed "$work/missing/env.json" h-env private main "$work/wenv" 5
+expect "an environment file in a missing directory exits 2" 2
+lacks "nothing is created without an environment" "gh repo create" "$calls"
+
+EXTRA="STUB_PUSH_FAIL=yes"
+runSeed "$work/env.json" h-pushfail private main "$work/wpf" 5
+expect "a failed push fails the run" 1
+has "tells the operator to delete the repository" "created NoNamedOrg-workflow/h-pushfail but a push failed: delete it before retrying" "$output"
+EXTRA=""
 
 runSeed "$work/env.json" hist-dev public development "$work/w1" 50
 expect "seedHistory creates and pushes a repository" 0
